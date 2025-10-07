@@ -1,0 +1,7 @@
+experiments:
+
+  # Study 1: Familiarity
+  familiarity_de:
+    dataset_path: "German_words_familiarity_ratings_3195_words_study_1.xlsx"
+    dataset_column: "Word"
+    prompt_path: "prompt_de.txt"
