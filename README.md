@@ -1,4 +1,3 @@
-
 # Psycholinguistics Experiments with Language Models
 
 Un sistema completo y robusto para ejecutar experimentos psicolingüísticos utilizando modelos de lenguaje grandes (LLMs). Este proyecto está específicamente diseñado para evaluar la **familiaridad de palabras** utilizando el modelo **Apertus-8B-Instruct**.
@@ -15,7 +14,7 @@ Este repositorio implementa un pipeline automatizado para:
 
 ## Inicio Rápido
 
-### 1. Configurar credenciales (opcional)
+### 1. Configurar credenciales
 
 Para modelos de Hugging Face privados o que requieren autorización, crea un archivo `api.env` como el del ejemplo `api_example.env`:
 
@@ -50,7 +49,7 @@ Abre `main.ipynb` y ejecuta las celdas secuencialmente:
 psycholinguistics_german/
 ├── main.ipynb                      	#  Notebook principal de ejecución
 ├── requirements.txt                 	#  Dependencias del proyecto
-├── api.env                         	#  Credenciales (opcional)
+├── api.env                         	#  Credenciales
 │
 ├── familiarity_german/              	#  Carpeta del experimento
 │   ├── config.yaml                  		#  Configuración del experimento
