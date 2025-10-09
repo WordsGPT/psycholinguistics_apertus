@@ -1,0 +1,427 @@
+"""
+Script for validating and correcting AI responses in psycholinguistics experiments.
+
+This module provides functionality to validate that AI responses comply with the
+expected output format specified in the original prompts. If a response doesn't 
+comply, it queries the AI model again to extract or correct the content to match
+the required format.
+"""
+
+import json
+import pandas as pd
+from pathlib import Path
+from typing import Dict, List, Any, Optional
+
+
+def validate_and_correct_responses(
+    experiment_name: str,
+    experiment_path: str,
+    model,
+    tokenizer,
+    device: str,
+    do_sample: bool = False
+) -> pd.DataFrame:
+    """
+    Validate and correct AI responses to ensure they comply with the expected format.
+    
+    This function reads the experiment results, validates each response against
+    the original prompt format, and corrects responses that don't comply. 
+    
+    FEATURES:
+    - Saves progress after EACH word (safe for interruptions)
+    - Marks ALL words as validated (even if no changes needed)
+    - Resumes from where it left off if interrupted
+    - Progress bar shows total progress (validated + pending)
+    
+    Args:
+        experiment_name: Name of the experiment (e.g., 'familiarity_de').
+        experiment_path: Path to the experiment folder (e.g., 'familiarity_german').
+        model: The loaded language model.
+        tokenizer: The tokenizer corresponding to the model.
+        device: Device to run the model on ('cuda', 'cpu', etc.).
+        do_sample: Whether to use sampling instead of greedy decoding (default: False).
+    
+    Returns:
+        pd.DataFrame with validated/corrected responses, including:
+        - 'word': The target word
+        - 'response': The validated/corrected response
+        - 'logprob': Average log probability
+        - 'validated': Boolean indicating if word was validated (always True after processing)
+        - 'corrected': Boolean indicating if response was corrected (True/False)
+        - 'original_response': The original response before correction (if corrected)
+    
+    Example:
+        >>> from scripts.validate_responses import validate_and_correct_responses
+        >>> from transformers import AutoModelForCausalLM, AutoTokenizer
+        >>> model = AutoModelForCausalLM.from_pretrained("model_name")
+        >>> tokenizer = AutoTokenizer.from_pretrained("model_name")
+        >>> device = "cuda" if torch.cuda.is_available() else "cpu"
+        >>> model.to(device)
+        >>> 
+        >>> df = validate_and_correct_responses(
+        ...     experiment_name="familiarity_de",
+        ...     experiment_path="familiarity_german",
+        ...     model=model,
+        ...     tokenizer=tokenizer,
+        ...     device=device
+        ... )
+    """
+    # Configurar rutas
+    exp_path = Path(experiment_path)
+    batch_file = exp_path / "batches" / f"{experiment_name}.jsonl"
+    outputs_dir = exp_path / "outputs"
+    output_file = outputs_dir / f"{experiment_name}.xlsx"
+    
+    # Verificar que existan los archivos necesarios
+    if not batch_file.exists():
+        raise FileNotFoundError(f"Archivo de batch no encontrado: {batch_file}")
+    
+    if not output_file.exists():
+        raise FileNotFoundError(
+            f"Archivo de resultados no encontrado: {output_file}\n"
+            "Por favor, ejecuta primero el experimento antes de validar."
+        )
+    
+    # Cargar datos del batch (prompts originales)
+    print(f"Leyendo prompts originales desde: {batch_file}")
+    batch_data = _read_jsonl(batch_file)
+    
+    # Crear diccionario de word -> prompt para acceso rápido
+    word_to_prompt = {item['word']: item['prompt'] for item in batch_data}
+    
+    # Cargar resultados existentes
+    print(f"Cargando resultados desde: {output_file}")
+    df = pd.read_excel(output_file)
+    
+    total_words = len(df)
+    print(f"Total de respuestas a validar: {total_words}")
+    
+    # Inicializar columnas para validación (si no existen)
+    if 'validated' not in df.columns:
+        df['validated'] = False
+    if 'corrected' not in df.columns:
+        df['corrected'] = False
+    if 'original_response' not in df.columns:
+        df['original_response'] = None
+    
+    # Identificar palabras ya validadas y pendientes
+    already_validated = df['validated'].sum()
+    pending_words = df[~df['validated']].copy()
+    pending_count = len(pending_words)
+    
+    if already_validated > 0:
+        print(f"Palabras ya validadas: {already_validated}")
+        print(f"Palabras pendientes de validar: {pending_count}")
+    
+    if pending_count == 0:
+        print("\n¡Todas las palabras ya han sido validadas!")
+        return df
+    
+    # Contadores para el resumen
+    corrections_count = 0
+    valid_count = 0
+    
+    print("\nIniciando validación de respuestas...\n")
+    
+    # Procesar solo las palabras pendientes
+    for idx in pending_words.index:
+        row = df.loc[idx]
+        word = row['word']
+        current_response = row['response']
+        
+        # Calcular progreso considerando TODAS las palabras (validadas + pendientes)
+        current_position = already_validated + (valid_count + corrections_count + 1)
+        progress_percent = (current_position / total_words) * 100
+        progress_bar = "█" * int(progress_percent // 5) + "░" * (20 - int(progress_percent // 5))
+        print(f"\r[{progress_bar}] {progress_percent:.1f}% ({current_position}/{total_words}) Validando: {word}", end="", flush=True)
+        
+        # Obtener el prompt original
+        original_prompt = word_to_prompt.get(word)
+        if not original_prompt:
+            print(f"\nAdvertencia: No se encontró prompt para la palabra '{word}', se marca como validada sin cambios.")
+            df.at[idx, 'validated'] = True
+            df.at[idx, 'corrected'] = False
+            _save_progress(df, output_file)
+            continue
+        
+        # Skip if response is an error but mark as validated
+        if pd.isna(current_response) or str(current_response).startswith('ERROR:'):
+            df.at[idx, 'validated'] = True
+            df.at[idx, 'corrected'] = False
+            _save_progress(df, output_file)
+            continue
+        
+        # Crear prompt de validación
+        validation_prompt = _build_validation_prompt(original_prompt, current_response)
+        
+        # Consultar al modelo para validar/corregir
+        try:
+            validation_result = _query_model_for_validation(
+                model=model,
+                tokenizer=tokenizer,
+                prompt=validation_prompt,
+                device=device,
+                do_sample=do_sample
+            )
+            
+            # Analizar la respuesta de validación
+            is_correct, corrected_response = _parse_validation_response(
+                validation_result,
+                current_response
+            )
+            
+            # Marcar como validada
+            df.at[idx, 'validated'] = True
+            
+            if is_correct:
+                # La respuesta es correcta, no necesita corrección
+                df.at[idx, 'corrected'] = False
+                valid_count += 1
+            else:
+                # La respuesta necesita corrección
+                if corrected_response != current_response:
+                    # Guardar respuesta original si no estaba ya guardada
+                    if pd.isna(df.at[idx, 'original_response']):
+                        df.at[idx, 'original_response'] = current_response
+                    df.at[idx, 'response'] = corrected_response
+                    df.at[idx, 'corrected'] = True
+                    corrections_count += 1
+                else:
+                    # El modelo devolvió lo mismo, se considera válida
+                    df.at[idx, 'corrected'] = False
+                    valid_count += 1
+            
+            # GUARDAR DESPUÉS DE CADA PALABRA
+            _save_progress(df, output_file)
+                    
+        except Exception as e:
+            print(f"\nError validando palabra '{word}': {e}")
+            # Marcar como validada pero sin corrección en caso de error
+            df.at[idx, 'validated'] = True
+            df.at[idx, 'corrected'] = False
+            _save_progress(df, output_file)
+            continue
+    
+    # Completar barra de progreso
+    print(f"\r[{'█' * 20}] 100.0% ({total_words}/{total_words}) ¡Validación completada!                                          ")
+    
+    # Resumen final
+    print(f"\n{'='*60}")
+    print(f"RESUMEN DE VALIDACIÓN")
+    print(f"{'='*60}")
+    print(f"Total de respuestas en archivo: {total_words}")
+    print(f"Palabras ya validadas previamente: {already_validated}")
+    print(f"Palabras validadas en esta ejecución: {valid_count + corrections_count}")
+    print(f"  - Respuestas correctas (sin cambios): {valid_count}")
+    print(f"  - Respuestas corregidas: {corrections_count}")
+    
+    if corrections_count > 0:
+        print(f"\nLas respuestas corregidas están marcadas con 'corrected=True'")
+        print(f"Las respuestas originales se guardaron en 'original_response'")
+    
+    print(f"\nArchivo actualizado: {output_file}")
+    print(f"{'='*60}\n")
+    
+    return df
+
+
+def _save_progress(df: pd.DataFrame, output_file: Path) -> None:
+    """
+    Save current progress to Excel file.
+    Uses a temporary file to avoid corruption if interrupted.
+    
+    Args:
+        df: DataFrame to save
+        output_file: Path to the output Excel file
+    """
+    try:
+        # Reordenar columnas para mejor legibilidad
+        column_order = ['word', 'response', 'logprob', 'validated', 'corrected', 'original_response']
+        existing_columns = [col for col in column_order if col in df.columns]
+        df_ordered = df[existing_columns]
+        
+        # Guardar con archivo temporal primero (para evitar corrupción)
+        temp_file = output_file.with_suffix('.tmp')
+        df_ordered.to_excel(temp_file, index=False)
+        
+        # Si el guardado temporal fue exitoso, reemplazar el archivo original
+        if temp_file.exists():
+            if output_file.exists():
+                output_file.unlink()  # Eliminar archivo original
+            temp_file.rename(output_file)  # Renombrar temp a original
+            
+    except Exception as e:
+        # En caso de error, no interrumpir el proceso
+        pass
+
+
+def _read_jsonl(file_path: Path) -> List[Dict[str, Any]]:
+    """Helper function to read JSONL files."""
+    data = []
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            if line.strip():
+                data.append(json.loads(line))
+    return data
+
+
+def _build_validation_prompt(original_prompt: str, answer: str) -> str:
+    """
+    Build the validation prompt to check if the response complies with the format.
+    
+    Args:
+        original_prompt: The original experiment prompt
+        answer: The AI's response to validate
+        
+    Returns:
+        The validation prompt string
+    """
+    validation_template = f"""Eres un asistente experto en validación y extracción de datos.
+
+        Se te proporciona un prompt original que especifica un formato de salida, y una respuesta que debe cumplir ese formato.
+
+        Tu tarea:
+
+        1. Verifica si la respuesta cumple EXACTAMENTE el formato solicitado en el prompt original.
+
+        2. Si cumple el formato exactamente (sin texto adicional, explicaciones, ni caracteres extra):
+        - Devuelve solo: "Formato correcto"
+
+        3. Si NO cumple el formato (tiene texto extra, explicaciones, frases, etc.):
+        - Extrae ÚNICAMENTE el contenido que se solicitó
+        - Devuelve SOLO ese contenido, sin ninguna explicación adicional
+        - Si el prompt pide "solo una Zahl/número", devuelve solo ese número
+        - Si el prompt pide una lista, devuelve solo la lista
+        - NO incluyas comillas, puntos, ni texto explicativo
+
+        Ejemplos:
+        - Prompt pide: "solo un número entre 1 y 7"
+        Respuesta: "Die Bekanntheit liegt bei 5."
+        Tu respuesta: 5
+
+        - Prompt pide: "solo un número entre 1 y 7"
+        Respuesta: "Bekanntheit: 5."
+        Tu respuesta: 5
+
+        - Prompt pide: "solo un número"
+        Respuesta: "7"
+        Tu respuesta: Formato correcto
+
+        Información:
+        - Prompt original: {original_prompt}
+        - Respuesta obtenida: {answer}
+
+        Tu respuesta (solo "Formato correcto" o el contenido extraído):"""
+    
+    return validation_template
+
+
+def _query_model_for_validation(
+    model,
+    tokenizer,
+    prompt: str,
+    device: str,
+    do_sample: bool = False
+) -> str:
+    """
+    Query the model to validate/correct a response.
+    
+    Args:
+        model: The loaded language model
+        tokenizer: The tokenizer
+        prompt: The validation prompt
+        device: Device to run on
+        do_sample: Whether to use sampling
+        
+    Returns:
+        The model's response (validation result)
+    """
+    import torch
+    import warnings
+    
+    # Preparar mensajes
+    messages = [{"role": "user", "content": prompt}]
+    
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*pad_token_id.*")
+        
+        # Preparar texto / tokens
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+        inputs = tokenizer(
+            [text],
+            return_tensors="pt",
+            add_special_tokens=False
+        ).to(device)
+        
+        # Generar respuesta
+        outputs = model.generate(
+            **inputs,
+            do_sample=do_sample,
+            max_new_tokens=512,  # Suficiente para validación/corrección
+            pad_token_id=tokenizer.eos_token_id
+        )
+        
+        # Decodificar respuesta
+        input_len = inputs["input_ids"].size(1)
+        generated_text = tokenizer.decode(
+            outputs[0][input_len:],
+            skip_special_tokens=True
+        )
+        
+        return generated_text.strip()
+
+
+def _parse_validation_response(validation_result: str, original_response: str) -> tuple[bool, str]:
+    """
+    Parse the validation response to determine if the format is correct.
+    
+    Args:
+        validation_result: The model's validation response
+        original_response: The original response being validated
+        
+    Returns:
+        Tuple of (is_correct: bool, corrected_response: str)
+        - If is_correct is True, corrected_response equals original_response
+        - If is_correct is False, corrected_response is the corrected version
+    """
+    import re
+    
+    # Normalizar la respuesta de validación
+    validation_lower = validation_result.lower().strip()
+    
+    # Verificar si el formato es correcto
+    if "formato correcto" in validation_lower:
+        return True, original_response
+    
+    # Si no dice "formato correcto", la respuesta es la corrección
+    corrected = validation_result.strip()
+    
+    # Si contiene "Formato correcto:" seguido de algo, extraer lo que sigue
+    if "formato correcto" in corrected.lower() and ":" in corrected:
+        parts = corrected.split(":", 1)
+        if len(parts) > 1:
+            corrected = parts[1].strip()
+        else:
+            corrected = original_response
+    
+    # Limpiar comillas adicionales
+    corrected = corrected.strip('"').strip("'").strip()
+    
+    # Si la corrección parece ser solo un número (caso común), extraerlo limpiamente
+    # Buscar patrones como "5", "5.", "Die... bei 5", etc.
+    number_match = re.search(r'\b([1-7])\b', corrected)
+    if number_match:
+        # Verificar si el original_response también pedía solo un número
+        # Si la corrección es mayormente texto pero contiene un número, extraerlo
+        if len(corrected) > 3 or not corrected.isdigit():
+            # La respuesta tiene texto extra, extraer solo el número
+            corrected = number_match.group(1)
+    
+    # Limpiar puntos finales si quedan
+    corrected = corrected.rstrip('.')
+    
+    return False, corrected
