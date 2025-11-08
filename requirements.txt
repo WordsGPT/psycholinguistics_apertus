@@ -1,17 +1,11 @@
-# Data + config
 pandas>=1.5.0
 pyyaml>=6.0
 python-dotenv>=1.0.0
 openpyxl>=3.0.0
 jsonlines>=2.0.0
-
-# Transformers / local model utilities (Apertus needs transformers >= 4.56.0)
 transformers>=4.56.0
 huggingface-hub>=0.16.0
 tokenizers>=0.13.0
-
-# PyTorch (install appropriate build for your CUDA or CPU)
-# For CPU-only use:
 torch>=2.0.0
 
 
