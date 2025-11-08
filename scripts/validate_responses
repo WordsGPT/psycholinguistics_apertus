@@ -50,21 +50,6 @@ def validate_and_correct_responses(
         - 'corrected': Boolean indicating if response was corrected (True/False)
         - 'original_response': The original response before correction (if corrected)
     
-    Example:
-        >>> from scripts.validate_responses import validate_and_correct_responses
-        >>> from transformers import AutoModelForCausalLM, AutoTokenizer
-        >>> model = AutoModelForCausalLM.from_pretrained("model_name")
-        >>> tokenizer = AutoTokenizer.from_pretrained("model_name")
-        >>> device = "cuda" if torch.cuda.is_available() else "cpu"
-        >>> model.to(device)
-        >>> 
-        >>> df = validate_and_correct_responses(
-        ...     experiment_name="familiarity_de",
-        ...     experiment_path="familiarity_german",
-        ...     model=model,
-        ...     tokenizer=tokenizer,
-        ...     device=device
-        ... )
     """
     # Configurar rutas
     exp_path = Path(experiment_path)
