@@ -40,6 +40,7 @@ Abre `main.ipynb` y ejecuta las celdas secuencialmente:
 3. **Cargar modelo** - Carga Apertus-8B-Instruct (8B parámetros)
 4. **Preparar experimento** - Genera prompts desde el dataset Excel
 5. **Ejecutar experimento** - Procesa palabras y guarda resultados
+6. **Valida resultadis** - Comprueba y corrige el formato de respuesta obtenido
 
 ## Arquitectura del Sistema
 
