@@ -2,16 +2,6 @@
 
 Un sistema completo y robusto para ejecutar experimentos psicolingüísticos utilizando modelos de lenguaje grandes (LLMs). Este proyecto está específicamente diseñado para evaluar la **familiaridad de palabras** utilizando el modelo **Apertus-8B-Instruct**.
 
-## Descripción del Proyecto
-
-Este repositorio implementa un pipeline automatizado para:
-
-- **Experimentos de Familiaridad**: Evalúa qué tan familiares son las palabras en una escala de 1-7
-- **Procesamiento por Lotes**: Maneja grandes datasets de forma eficiente
-- **Análisis de Probabilidades**: Captura log-probabilidades detalladas para cada respuesta
-- **Robustez**: Sistema de recuperación automática y validación de datos
-- **Progreso Visual**: Barras de progreso en tiempo real y reportes detallados
-
 ## Inicio Rápido
 
 ### 1. Configurar credenciales
@@ -40,7 +30,7 @@ Abre `main.ipynb` y ejecuta las celdas secuencialmente:
 3. **Cargar modelo** - Carga Apertus-8B-Instruct (8B parámetros)
 4. **Preparar experimento** - Genera prompts desde el dataset Excel
 5. **Ejecutar experimento** - Procesa palabras y guarda resultados
-6. **Valida resultadis** - Comprueba y corrige el formato de respuesta obtenido
+6. **Valida resultados** - Comprueba y corrige el formato de respuesta obtenido
 
 ## Arquitectura del Sistema
 
