@@ -1,15 +1,12 @@
-"""prepare_experiment.py
+"""
 
-Small utility to prepare JSONL batches for experiments that use a local model.
-
-Main entrypoint: prepare_batches_for_experiment(experiment_name, experiment_path)
 It reads the experiment config, loads the dataset column, injects each word into the prompt
 template (placeholder {WORD}) and writes a JSONL file at <experiment_path>/batches/<experiment_basename>.jsonl
+
 """
 
 import json
 import os
-import sys
 import jsonlines
 import re
 

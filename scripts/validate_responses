@@ -1,31 +1,18 @@
 """
-Script for validating and correcting AI responses in psycholinguistics experiments.
+Script for validating and correcting AI responses without the expected output format specified
+in the original prompts.
 
-This module provides functionality to validate that AI responses comply with the
-expected output format specified in the original prompts. If a response doesn't 
-comply, it queries the AI model again to extract or correct the content to match
-the required format.
+The AI model will extract and correct the content to matchthe required format.
 """
 
 import json
 import pandas as pd
 from pathlib import Path
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 
 
-def validate_and_correct_responses(
-    experiment_name: str,
-    experiment_path: str,
-    model,
-    tokenizer,
-    device: str,
-    do_sample: bool = False
-) -> pd.DataFrame:
+def validate_and_correct_responses(experiment_name: str, experiment_path: str, model, tokenizer, device: str, do_sample: bool = False) -> pd.DataFrame:
     """
-    Validate and correct AI responses to ensure they comply with the expected format.
-    
-    This function reads the experiment results, validates each response against
-    the original prompt format, and corrects responses that don't comply. 
     
     FEATURES:
     - Saves progress after EACH word (safe for interruptions)
@@ -49,22 +36,7 @@ def validate_and_correct_responses(
         - 'validated': Boolean indicating if word was validated (always True after processing)
         - 'corrected': Boolean indicating if response was corrected (True/False)
         - 'original_response': The original response before correction (if corrected)
-    
-    Example:
-        >>> from scripts.validate_responses import validate_and_correct_responses
-        >>> from transformers import AutoModelForCausalLM, AutoTokenizer
-        >>> model = AutoModelForCausalLM.from_pretrained("model_name")
-        >>> tokenizer = AutoTokenizer.from_pretrained("model_name")
-        >>> device = "cuda" if torch.cuda.is_available() else "cpu"
-        >>> model.to(device)
-        >>> 
-        >>> df = validate_and_correct_responses(
-        ...     experiment_name="familiarity_de",
-        ...     experiment_path="familiarity_german",
-        ...     model=model,
-        ...     tokenizer=tokenizer,
-        ...     device=device
-        ... )
+
     """
     # Configurar rutas
     exp_path = Path(experiment_path)
@@ -203,7 +175,7 @@ def validate_and_correct_responses(
             continue
     
     # Completar barra de progreso
-    print(f"\r[{'█' * 20}] 100.0% ({total_words}/{total_words}) ¡Validación completada!                                          ")
+    print(f"\r[{'█' * 20}] 100.0% ({total_words}/{total_words}) ¡Validación completada!")
     
     # Resumen final
     print(f"\n{'='*60}")
@@ -290,7 +262,7 @@ def _build_validation_prompt(original_prompt: str, answer: str) -> str:
         3. Si NO cumple el formato (tiene texto extra, explicaciones, frases, etc.):
         - Extrae ÚNICAMENTE el contenido que se solicitó
         - Devuelve SOLO ese contenido, sin ninguna explicación adicional
-        - Si el prompt pide "solo una Zahl/número", devuelve solo ese número
+        - Si el prompt pide "solo un Zahl/número", devuelve solo ese número
         - Si el prompt pide una lista, devuelve solo la lista
         - NO incluyas comillas, puntos, ni texto explicativo
 
@@ -316,13 +288,7 @@ def _build_validation_prompt(original_prompt: str, answer: str) -> str:
     return validation_template
 
 
-def _query_model_for_validation(
-    model,
-    tokenizer,
-    prompt: str,
-    device: str,
-    do_sample: bool = False
-) -> str:
+def _query_model_for_validation(model, tokenizer, prompt: str, device: str, do_sample: bool = False) -> str:
     """
     Query the model to validate/correct a response.
     
@@ -336,7 +302,6 @@ def _query_model_for_validation(
     Returns:
         The model's response (validation result)
     """
-    import torch
     import warnings
     
     # Preparar mensajes
@@ -411,14 +376,11 @@ def _parse_validation_response(validation_result: str, original_response: str) -
     # Limpiar comillas adicionales
     corrected = corrected.strip('"').strip("'").strip()
     
-    # Si la corrección parece ser solo un número (caso común), extraerlo limpiamente
-    # Buscar patrones como "5", "5.", "Die... bei 5", etc.
+    # Extraer número limpio (1-7) de la corrección
     number_match = re.search(r'\b([1-7])\b', corrected)
     if number_match:
-        # Verificar si el original_response también pedía solo un número
-        # Si la corrección es mayormente texto pero contiene un número, extraerlo
+        # Si hay texto extra, dejar solo el número
         if len(corrected) > 3 or not corrected.isdigit():
-            # La respuesta tiene texto extra, extraer solo el número
             corrected = number_match.group(1)
     
     # Limpiar puntos finales si quedan

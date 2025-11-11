@@ -1,10 +1,7 @@
 """
-Script for executing psycholinguistics experiments with language models.
 
-This module provides utilities for generating text responses and running 
-experiments from batch files, saving results to Excel. The logprob calculation
-uses a pre-inference method that analyzes digit probabilities (1-7) in the 
-top-10 tokens before any sampling occurs.
+This module provides utilities for generating text responses and saving the results to Excel.
+
 """
 
 import torch
@@ -12,7 +9,7 @@ import json
 import math
 import pandas as pd
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Set
+from typing import Dict, List, Any, Set
 
 
 def _read_jsonl(file_path: Path) -> List[Dict[str, Any]]:
@@ -34,19 +31,18 @@ def _calculate_avg_logprob(tokens: List[Dict[str, Any]]) -> float:
 
 def _calculate_digit_logprob(topk_list: List[Dict[str, Any]]) -> float:
     """
-    Calculate weighted logprob score from digits 1-7 in pre-inference distribution.
+    Calculate weighted logprob score from digits 1-7.
     
-    Uses the probability distribution BEFORE token sampling to calculate:
     score = Σ(digit × probability) for digits ∈ {1,2,3,4,5,6,7} ∩ top_10
     
     Args:
-        topk_list: Top-k tokens with probabilities from pre-inference distribution
+        topk_list: Top-k tokens
         
     Returns:
         Weighted sum of digit values by their probabilities
         
     Example:
-        Pre-inference top 10: "1"(0.9), "2"(0.05), "3"(0.05)
+        Top 10: "1"(0.9), "2"(0.05), "3"(0.05)
         Result: 1×0.9 + 2×0.05 + 3×0.05 = 1.15
     """
     digit_probs = {}
@@ -90,41 +86,47 @@ def _check_incomplete_rows(df: pd.DataFrame) -> List[str]:
         
         # Check if word is missing or empty
         if pd.isna(word) or str(word).strip() == '':
-            incomplete_words.append(f"Fila {idx+1}: palabra vacía")
+            incomplete_words.append(idx)
             continue
         
         # Check if response is missing or empty
         if pd.isna(response) or str(response).strip() == '':
-            incomplete_words.append(str(word))
+            incomplete_words.append(idx)
             continue
         
         # Check if response starts with "ERROR:" (failed generation)
         if str(response).startswith('ERROR:'):
-            incomplete_words.append(str(word))
+            incomplete_words.append(idx)
             continue
         
         # Check if logprob is missing (but allow 0.0)
         if pd.isna(logprob):
-            incomplete_words.append(str(word))
+            incomplete_words.append(idx)
             continue
     
     return incomplete_words
 
 
-def _get_incomplete_words_from_file(output_file: Path) -> Set[str]:
+def _get_incomplete_words_from_file(output_file: Path, batch_file: Path) -> Set[str]:
     """Get set of words that need to be reprocessed due to incomplete data."""
     if not output_file.exists():
+        return set()
+    if not batch_file.exists():
         return set()
     
     try:
         df = pd.read_excel(output_file)
         incomplete_rows = _check_incomplete_rows(df)
+
+        batch_data = _read_jsonl(batch_file)
         
-        # Extract actual word names (filter out error messages like "Fila X: palabra vacía")
+        # Extract actual word names from batches
         incomplete_words = set()
-        for item in incomplete_rows:
-            if not item.startswith('Fila '):
-                incomplete_words.add(item)
+        for idx in incomplete_rows:
+            if idx < len(batch_data):  # Validate index is within range
+                word = batch_data[idx].get('word', '')
+                if word and str(word).strip():  # Only add non-empty words
+                    incomplete_words.add(str(word))
         
         return incomplete_words
         
@@ -135,7 +137,7 @@ def _get_incomplete_words_from_file(output_file: Path) -> Set[str]:
 def _validate_output_file(output_file: Path) -> bool:
     """Validate that the output file is properly formatted and readable."""
     if not output_file.exists():
-        return True  # File doesn't exist, that's fine
+        return True
     
     try:
         df = pd.read_excel(output_file)
@@ -149,14 +151,14 @@ def _validate_output_file(output_file: Path) -> bool:
         # Check if there are any duplicate words
         if df['word'].duplicated().any():
             duplicates = df[df['word'].duplicated()]['word'].tolist()
-            print(f"Palabras duplicadas encontradas en {output_file.name}: {duplicates[:5]}...")
+            print(f"Palabras duplicadas encontradas en {output_file.name}: {duplicates}")
             return False
         
         # Check for incomplete rows (missing data)
         incomplete_rows = _check_incomplete_rows(df)
         if incomplete_rows:
             print(f"Se encontraron {len(incomplete_rows)} filas incompletas en {output_file.name}")
-            print(f"   Primeras 5 palabras con datos incompletos: {incomplete_rows[:5]}")
+            print(f"   Palabras con datos incompletos: {incomplete_rows}")
             return False
         
         return True
@@ -166,33 +168,24 @@ def _validate_output_file(output_file: Path) -> bool:
         return False
 
 
-def run_experiment(
-    experiment_name: str,
-    experiment_path: str,
-    model,
-    tokenizer,
-    device: str,
-    top_k: int = 10,
-    do_sample: bool = False
-) -> pd.DataFrame:
+def run_experiment( experiment_name: str, experiment_path: str, model, tokenizer, device: str, top_k: int = 10, do_sample: bool = False) -> pd.DataFrame:
     """
-    Execute psycholinguistics experiment with pre-inference logprob calculation.
     
     Processes prompts from JSONL batch file, generates responses, and calculates
     logprob scores based on digit probabilities (1-7) in the pre-inference
-    distribution. Results are saved to Excel with automatic resume capability.
+    distribution. Results are saved to Excel.
     
     Args:
         experiment_name: Experiment identifier (finds {experiment_name}.jsonl)
         experiment_path: Path to experiment folder
         model: Loaded language model
         tokenizer: Model tokenizer
-        device: Device for model execution ('cuda', 'cpu', etc.)
+        device: Device for model execution ('cuda' / 'cpu')
         top_k: Number of top tokens to analyze (default: 10)
         do_sample: Use sampling vs greedy decoding (default: False)
     
     Returns:
-        DataFrame with columns: 'word', 'response', 'logprob'
+        Excel with columns: 'word', 'response', 'logprob'
     """
     # Setup paths
     exp_path = Path(experiment_path)
@@ -224,7 +217,7 @@ def run_experiment(
             if 'word' in existing_df.columns and len(existing_df) > 0:
                 # Get all words and identify incomplete ones
                 all_words_in_file = set(existing_df['word'].tolist())
-                incomplete_words = _get_incomplete_words_from_file(output_file)
+                incomplete_words = _get_incomplete_words_from_file(output_file, batch_file)
                 
                 # Only consider complete words as processed
                 processed_words = all_words_in_file - incomplete_words
@@ -233,7 +226,6 @@ def run_experiment(
                 print(f"Se encontraron {len(all_words_in_file)} palabras en el archivo")
                 if incomplete_words:
                     print(f"{len(incomplete_words)} palabras incompletas serán reprocesadas")
-                    print(f"   Ejemplos: {list(incomplete_words)[:5]}...")
                 print(f"{len(processed_words)} palabras completamente procesadas")
             else:
                 print("Archivo existe pero está vacío o no tiene la columna 'word'")
@@ -291,7 +283,7 @@ def run_experiment(
         # Prepare messages for model
         messages = [{"role": "user", "content": prompt}]
         
-        # Generate response with pre-inference logprob calculation
+        # Generate response
         try:
             generation_result = _generate_single_response(
                 model=model,
@@ -318,7 +310,7 @@ def run_experiment(
                 'logprob': None
             })
         
-        # Save after each word to preserve progress
+        # Save after each result to preserve progress
         try:
             df_results = pd.DataFrame(results)
             
@@ -339,7 +331,7 @@ def run_experiment(
             pass
     
     # Complete progress bar
-    print(f"\r[{'█' * 20}] 100.0% ({total_batches}/{total_batches}) ¡Completado!                                          ")
+    print(f"\r[{'█' * 20}] 100.0% ({total_batches}/{total_batches}) ¡Completado!")
     
     print(f"\nProcesamiento completado!")
     
@@ -349,7 +341,7 @@ def run_experiment(
     
     if incomplete_final:
         print(f"\nADVERTENCIA: {len(incomplete_final)} palabras con datos incompletos:")
-        print(f"   {incomplete_final[:10]}...")
+        print(f"   {incomplete_final}...")
         print(f"   Serán reprocesadas en la próxima ejecución.")
     else:
         print(f"\nÉXITO: Todas las {len(final_df)} palabras procesadas correctamente.")
@@ -364,19 +356,9 @@ def run_experiment(
     return final_df
 
 
-def _generate_single_response(
-    model,
-    tokenizer,
-    messages: List[Dict[str, str]],
-    device: str,
-    top_k: int = 10,
-    do_sample: bool = False
-) -> Dict[str, Any]:
+def _generate_single_response(model, tokenizer, messages: List[Dict[str, str]], device: str, top_k: int = 10, do_sample: bool = False) -> Dict[str, Any]:
     """
-    Generate response with pre-inference digit probability calculation.
-    
-    Calculates logprob score from probability distribution BEFORE token sampling,
-    analyzing digits 1-7 in top-k tokens for the first position.
+    Generate responses.
     """
     import warnings
     with warnings.catch_warnings():

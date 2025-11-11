@@ -1,5 +1,3 @@
-import json
-
 import pandas as pd
 import yaml
 
@@ -11,8 +9,10 @@ def read_yaml(file_path: str):
 
 
 def read_txt(file_path: str) -> str:
-    # Read text files with UTF-8 only. If the file is not UTF-8 encoded,
-    # a UnicodeDecodeError will be raised for the caller to handle.
+    """"
+    Read text files with UTF-8 only. If the file is not UTF-8 encoded,
+    a UnicodeDecodeError will be raised for the caller to handle.
+    """
     with open(file_path, "r", encoding="utf-8") as file:
         return file.read()
 
@@ -44,8 +44,10 @@ def load_config(config_type: str, name: str) -> dict:
 
 def read_column_as_list(file_path: str, column_name: str) -> list[int]:
     if file_path.endswith(".csv"):
-        # Read CSV assuming UTF-8 only. If the file is not UTF-8 encoded,
-        # pandas will raise an error and the caller can handle it.
+        """"
+        Read CSV assuming UTF-8 only. If the file is not UTF-8 encoded,
+        pandas will raise an error and the caller can handle it.
+        """
         df = pd.read_csv(file_path, encoding="utf-8")
     elif file_path.endswith(".xlsx"):
         df = pd.read_excel(file_path)
